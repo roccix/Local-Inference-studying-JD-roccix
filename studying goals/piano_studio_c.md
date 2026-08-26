@@ -14,6 +14,39 @@ caso manuale; expected NumPy; atol/rtol.
 
 Mantieni una versione semplice anche quando aggiungerai quella veloce. In debug usa warning completi e sanitizer.
 
+## Stato iniziale e metodo didattico personalizzato
+
+Le conoscenze verificate al termine della prima lezione sono registrate in
+[`roccix/01_inference_and_generation.md`](../roccix/01_inference_and_generation.md).
+
+Roccix sa attualmente:
+
+- distinguere scalare, vettore e matrice;
+- descrivere l'inferenza come `y = f(x; theta)`;
+- interpretare `theta` come contenitore dei parametri appresi e fissi durante
+  l'inferenza;
+- distinguere vocabolario, sequenza di token ID, logits e token selezionato;
+- spiegare che la generazione aggiunge il token scelto alla sequenza e riusa lo
+  stesso modello.
+
+Il percorso deve adottare queste regole aggiuntive:
+
+1. Presentare un solo nuovo concetto alla volta, con risposte concise.
+2. Affiancare il termine tecnico inglese a quello italiano.
+3. Definire ogni simbolo prima di usarlo e preferire formule leggibili nel
+   terminale.
+4. Non anticipare attention, embedding, KV cache o altre strutture finche non
+   sono necessarie alla lezione corrente.
+5. Concludere ogni spiegazione con una breve domanda di verifica.
+6. Proporre il passo successivo e gli approfondimenti opzionali, lasciando a
+   Roccix la scelta.
+7. Registrare come acquisito solo cio che viene confermato dalle risposte, non
+   cio che e stato semplicemente esposto.
+
+Prossimo argomento: logits e greedy decoding con `argmax`. Softmax,
+probabilita, temperature e sampling vengono dopo che questa distinzione e
+stabile.
+
 ## Lavoro concreto per le unita condivise
 
 ### 0-1. Sistema completo e tokenizer
