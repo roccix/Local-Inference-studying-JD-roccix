@@ -1,178 +1,116 @@
-# Percorso pratico per chi conosce C
+# Piano operativo di roccix: dal C all'inferenza Llama
 
-## Obiettivo
+## Assunzione e ruolo
 
-Il tuo compito non e solo riscrivere `run.c`. Alla fine del percorso dovrai saper spiegare, implementare e misurare un motore di inferenza Llama 2 in C, prima in `float32` e poi quantizzato in `int8`.
+Si assume soltanto che tu conosca C; nessuna conoscenza AI e data per scontata. Segui le unita del piano condiviso senza saltarne nessuna. Il tuo ruolo iniziale e trasformare ogni operazione gia capita a mano in loop, layout e memoria espliciti; non e ottimizzare.
 
-Il risultato finale dovra:
-
-1. caricare un checkpoint;
-2. convertire il prompt in token;
-3. eseguire il Transformer;
-4. generare gli stessi token del riferimento Python in modalita greedy;
-5. caricare pesi Q8_0 ed eseguire matmul quantizzate;
-6. confrontare correttezza, memoria e velocita.
-
-Non devi studiare tutta la matematica in anticipo. Per ogni operazione segui questo ciclo:
+Prima di ogni funzione compila:
 
 ```text
-esempio numerico a mano
--> versione Python leggibile
--> versione C
--> confronto automatico
--> uso nel modello
+scopo; input/output con shape e dtype; formula/pseudocodice;
+elementi e byte; buffer letti/modificati; ownership e lifetime;
+caso manuale; expected NumPy; atol/rtol.
 ```
 
-## Regole di lavoro
+Mantieni una versione semplice anche quando aggiungerai quella veloce. In debug usa warning completi e sanitizer.
 
-- Scrivi sempre la forma dei dati: per esempio `W[4][3] * x[3] -> y[4]`.
-- Chiedi al tuo compagno di spiegare la formula con numeri piccoli, non soltanto con simboli.
-- Spiega al tuo compagno puntatori, layout, lifetime e ownership della memoria.
-- Non ottimizzare una funzione senza un test numerico.
-- Usa inizialmente generazione greedy (`-t 0.0`), per avere risultati riproducibili.
-- Mantieni una versione semplice di riferimento anche quando aggiungerete ottimizzazioni.
+## Lavoro concreto per le unita condivise
 
-## Fase 1 — Orientamento nel repository
+### 0-1. Sistema completo e tokenizer
 
-Compila ed esegui i test locali:
+1. Compila ed esegui il riferimento seguendo il README.
+2. Traccia `main -> generate -> forward -> sample`, senza studiare ancora il corpo matematico.
+3. Disegna file, pesi persistenti, attivazioni, cache e output.
+4. Implementa un vocabolario giocattolo, prima decode ID->stringa, poi encode.
+5. Aggiungi i merge BPE definiti con JD.
+6. Testa ID fuori range, stringa vuota, spazi, punteggiatura e UTF-8 come byte.
+7. Per ogni allocazione annota proprietario e cleanup.
 
-```bash
-make rundebug
-make testcc
-```
+Prompt LLM: “Mostrami dieci variabili tipiche di un LLM e fammele classificare come configurazione, peso, attivazione o cache”.
 
-Con i file del modello 260K disponibili:
+### 2. Layout e ponte binario
 
-```bash
-./run test/stories260K.bin -z test/tok512.bin -t 0.0 -n 10
-```
+1. Alloca e stampa array 1D, 2D e 3D linearizzati.
+2. Scrivi funzioni di offset per `[row,col]` e `[layer,pos,head,component]`.
+3. Predici cinque indirizzi relativi prima di eseguire.
+4. Leggi il fixture `float32` di JD validando magic, versione, shape, dtype, endian e lunghezza.
+5. Produci lo stesso formato da C per Python.
+6. Gestisci `fopen`, letture corte, dimensioni invalide, moltiplicazioni `size_t` in overflow e allocazioni fallite.
+7. Usa tipi a larghezza fissa nel formato.
 
-Leggi `run.c` in questo ordine:
+### 3-4. Primitive e precisione
 
-1. `main`;
-2. `Config`, `TransformerWeights`, `RunState`, `Transformer`;
-3. `build_transformer` e caricamento del checkpoint;
-4. `malloc_run_state` e funzioni di cleanup;
-5. `rmsnorm`, `softmax`, `matmul`;
-6. `forward`, un blocco concettuale alla volta;
-7. `sample_argmax` e `sample`;
-8. tokenizer;
-9. `generate`.
+Implementa una funzione e un test alla volta: vector add, element-wise multiply, scalar multiply, sum, max, argmax, dot, matvec row-major, mean-square, RMS, confronto `atol/rtol`.
 
-Per ogni funzione annota:
+Per ciascuna:
 
-```text
-Scopo:
-Input e dimensioni:
-Output e dimensioni:
-Memoria letta:
-Memoria modificata:
-Chi possiede la memoria:
-Test disponibile:
-```
+1. ricevi shape e expected values da JD;
+2. prova zero, negativi, frazioni, valori grandi e dimensione zero se ammessa;
+3. stampa il primo indice divergente;
+4. spiega `w[i*d+j]` con un disegno della memoria;
+5. sperimenta ordini di accumulazione e overflow dei tipi interi.
 
-Rimanda `runq.c`, `train.py` ed `export.py` finche l'inferenza `float32` non sara chiara.
+Prompt: “Dammi casi di test difficili per matvec `float32`, senza implementazione; indica il bug rilevato da ciascuno”.
 
-## Fase 2 — Matematica minima attraverso C
+### 5-8. Rete minima e primitive Llama
 
-Implementa queste operazioni in un piccolo file separato:
+1. Scrivi `linear(out,W,x,rows,cols)` usando matvec.
+2. Costruisci il forward `3->2->2`; nessuna allocazione dentro la primitiva.
+3. Confronta ogni layer, non solo l'output.
+4. Implementa softmax ingenua, provoca overflow, poi rendila stabile.
+5. Implementa greedy; RNG/sampling, temperature e top-p soltanto dopo gli expected di JD.
+6. Implementa embedding lookup come selezione di riga con validazione ID.
+7. Scomponi RMSNorm in mean-square, epsilon, inverse RMS, scale element-wise.
+8. Implementa sigmoid, SiLU, gating SwiGLU e residual; documenta l'aliasing consentito.
+9. Solo dopo confronta ciascuna funzione con `run.c`.
 
-1. somma e prodotto elemento per elemento;
-2. prodotto scalare;
-3. prodotto matrice-vettore;
-4. media quadratica;
-5. RMSNorm;
-6. softmax stabile;
-7. SiLU;
-8. argmax.
+### 9-10. Attention minima
 
-Per ogni operazione:
+1. Crea un programma autonomo: una head, due componenti, prima uno poi due token.
+2. Usa pesi/expected preparati con JD.
+3. Stampa q, k, v, raw score, scaled score, probabilita e output.
+4. Rendi visibile ogni cella esclusa dalla causal mask.
+5. Estendi a tre token.
+6. Confronta ogni valore prima di aprire il loop equivalente in `forward()`.
 
-- calcola un caso con 2–4 elementi a mano;
-- ricevi dal tuo compagno il risultato Python/NumPy;
-- implementa la funzione C con loop espliciti;
-- confronta con tolleranza, non con uguaglianza esatta;
-- prova anche input nulli, negativi e di grande valore.
+Prompt: “Dammi un indice in un tensore flat `[position,head,component]` e attendi che calcoli offset e byte”.
 
-Concetti matematici da saper spiegare in linguaggio semplice:
+### 11-13. Multi-head, GQA, RoPE e cache
 
-- un vettore e una lista ordinata di numeri;
-- una matrice trasforma un vettore in un altro vettore;
-- il prodotto scalare misura quanto due vettori puntano nella stessa direzione;
-- softmax trasforma punteggi in probabilita;
-- RMSNorm controlla la scala di un vettore;
-- un logit e un punteggio non ancora normalizzato.
+1. Fissa e documenta il layout prima di scrivere i loop.
+2. Implementa due heads separate, concatenazione e `Wo`.
+3. Aggiungi la mappa esplicita query-head->KV-head; usa valori sentinel per trovare head errate.
+4. Implementa una rotazione di due float; testa 0°, 90° e norma.
+5. Estendi RoPE a coppie, frequenze e posizioni; controlla i limiti q/KV.
+6. Definisci la KV cache con shape e byte checked.
+7. Per tre posizioni stampa base, offset, indirizzo e contenuto scritto.
+8. Inizializza il futuro con sentinel e prova che non venga letto.
+9. Confronta cached contro ricalcolo completo.
+10. Documenta create/reset/reuse/destroy.
 
-## Fase 3 — Forward pass Llama
+### 14. Blocco Llama
 
-Studia `forward()` in questo ordine:
+1. Funzioni separate per attention e feed-forward.
+2. Prealloca `RunState`; nessun `malloc` nel forward.
+3. Tabella di tutti i buffer e di quelli riutilizzabili.
+4. Trace attivabile per layer/posizione scelti.
+5. Prima blocco artificiale, poi layer 0/position 0 reale.
+6. Fermati alla prima divergenza; non allargare la tolleranza senza causa.
 
-1. lookup dell'embedding del token;
-2. loop sui layer;
-3. RMSNorm prima dell'attenzione;
-4. proiezioni Q, K, V;
-5. RoPE come rotazione di coppie di valori;
-6. scrittura e lettura della KV cache;
-7. score di attenzione e softmax;
-8. somma pesata dei value;
-9. proiezione di output e connessione residuale;
-10. RMSNorm e blocco SwiGLU;
-11. normalizzazione finale e logits.
+### 15. Checkpoint
 
-Prima di passare oltre, devi poter disegnare questo flusso e indicare la dimensione di ogni buffer.
+1. Tabella campo/offset/byte/significato della configurazione.
+2. Deriva, non copiare, shape e byte di ogni peso.
+3. Usa add/multiply checked per `size_t`.
+4. Testa file corto, header assurdo e allocazione fallita.
+5. Mappa ogni puntatore a un intervallo del file.
+6. Fai confrontare a JD campioni e checksum.
 
-### Esercizio obbligatorio: attenzione minuscola
+### 16. Motore float32
 
-Implementa un'attenzione con:
+Ordine rigido: embedding; un layer/posizione; tutti i layer/una posizione; norm finale; logits; argmax; 2 token; 10; 50; tokenizer/decode; 200 greedy; sampling opzionale.
 
-```text
-sequence_length = 2
-head_size = 2
-n_heads = 1
-```
-
-Stampa `q`, `k`, `v`, score, probabilita e output. Il tuo compagno produrra gli stessi valori con NumPy. I due risultati devono coincidere entro una tolleranza concordata.
-
-### Esercizio obbligatorio: KV cache
-
-Esegui tre posizioni. Stampa l'indirizzo e il contenuto della porzione di cache usata a ogni passo. Devi saper spiegare perche K e V precedenti non vengono ricalcolati.
-
-## Fase 4 — Il vostro motore `float32`
-
-Non copiare la struttura monolitica di `run.c`. Una possibile organizzazione e:
-
-```text
-include/
-  checkpoint.h
-  ops.h
-  transformer.h
-  tokenizer.h
-  sampler.h
-src/
-  checkpoint.c
-  ops.c
-  transformer.c
-  tokenizer.c
-  sampler.c
-  main.c
-tests/
-```
-
-Ordine di implementazione:
-
-1. primitive numeriche;
-2. formato e caricamento del checkpoint;
-3. embedding;
-4. RoPE;
-5. attenzione e KV cache;
-6. SwiGLU;
-7. Transformer block;
-8. forward completo;
-9. greedy sampling;
-10. tokenizer e generazione;
-11. temperature e top-p.
-
-Usa almeno tre build:
+Build minime:
 
 ```text
 debug:    -O0 -g -Wall -Wextra -Wpedantic
@@ -180,105 +118,31 @@ sanitize: -O1 -g -fsanitize=address,undefined
 release:  -O3 -DNDEBUG
 ```
 
-Il tuo compito principale durante questa fase e rendere espliciti:
+Per ogni mismatch segui l'ordine del protocollo condiviso. La build sanitizer deve essere pulita.
 
-- ownership delle allocazioni;
-- dimensione in byte di ogni tensore;
-- offset dei tensori nel checkpoint;
-- layout row-major delle matrici;
-- lifetime di pesi, attivazioni e cache;
-- controllo di overflow nei calcoli delle dimensioni.
+### 17-19. Quantizzazione/Q8_0
 
-### Criterio di completamento
+1. Quantize/dequantize di un gruppo; gestisci zero, round e clip.
+2. Misura errore e storage.
+3. Dimostra il bound e usa accumulatore `int32`.
+4. Leggi `export.py`/`runq.c` solo dopo l'esercizio indipendente.
+5. Loader versionato: valida type, group size, shape e file length.
+6. Confronta i byte di fixture zero/saturazione/outlier/multigruppo.
+7. Implementa activation quantization, dot e matvec.
+8. Sostituisci una matvec per volta.
+9. Tieni distinti bug C-vs-NumPy Q8_0 ed errore Q8_0-vs-float.
 
-Con il modello 260K, il vostro C deve produrre gli stessi token greedy del riferimento Python per almeno 200 token. Alcuni tensori intermedi scelti devono coincidere entro la tolleranza documentata. La build con sanitizer non deve riportare errori.
+### 20. Ottimizzazione
 
-## Fase 5 — Quantizzazione Q8_0
+1. Congela baseline e comando.
+2. Profila prima di scegliere.
+3. Elimina allocazioni per token; misura.
+4. Migliora localita/ordine loop; misura.
+5. OpenMP soltanto su righe indipendenti; misura diversi thread.
+6. Leggi il report di vectorization.
+7. SIMD esplicito soltanto sul collo misurato.
+8. Dopo ogni cambio: unit test, cross-test, sanitizer e stesso benchmark.
 
-Studia prima un singolo vettore. Per quantizzazione simmetrica `int8`:
+## Verifica personale finale
 
-```text
-scale = max(abs(x)) / 127
-q[i] = round(x[i] / scale)
-x_ricostruito[i] = q[i] * scale
-```
-
-Gestisci esplicitamente il caso in cui tutti i valori siano zero.
-
-Implementa e testa:
-
-1. `quantize_vector`;
-2. `dequantize_vector`;
-3. errore massimo e medio;
-4. quantizzazione per tensore;
-5. quantizzazione per riga;
-6. quantizzazione a gruppi di 64, 32, 16 e 8 valori.
-
-Inserisci un outlier nel vettore e osserva come cambia l'errore. Questo rende concreto il motivo dei gruppi.
-
-Poi leggi il codice reale in questo ordine:
-
-1. `quantize_q80` in `export.py`;
-2. export versione 2 in `export.py`;
-3. `QuantizedTensor` in `runq.c`;
-4. `quantize` e `dequantize`;
-5. `matmul` quantizzata;
-6. forward quantizzato.
-
-Per un gruppo, il dot product usa l'idea:
-
-```text
-dot(float_x, float_w)
-~= scale_x * scale_w * sum(int_x[i] * int_w[i])
-```
-
-L'accumulatore deve essere piu largo degli operandi `int8`. Calcola un limite superiore prima di scegliere il tipo.
-
-### Criterio di completamento
-
-Il motore quantizzato deve:
-
-- caricare un formato versionato;
-- verificare quantization type e group size;
-- concordare con il riferimento quantizzato Python;
-- misurare la deviazione dal modello `float32`;
-- riportare dimensione del file, RAM e token al secondo.
-
-## Fase 6 — Ottimizzazione
-
-Ottimizza soltanto dopo avere salvato una baseline. Procedi cosi:
-
-1. elimina allocazioni nel loop per token;
-2. misura i tempi per operazione;
-3. migliora la localita degli accessi;
-4. parallelizza le righe indipendenti della matmul con OpenMP;
-5. controlla i report di auto-vectorization del compilatore;
-6. valuta SIMD esplicito soltanto sul vero collo di bottiglia.
-
-Ogni benchmark deve registrare:
-
-```text
-CPU, compilatore, flag, thread, modello, context length,
-numero di token, dimensione file, RAM, token/s e metrica di errore
-```
-
-## Come insegnare e come imparare dal compagno
-
-Quando insegni C, non limitarti alla sintassi. Fai prevedere al tuo compagno:
-
-- quanti byte vengono allocati;
-- dove punta ogni puntatore;
-- quando un buffer diventa invalido;
-- come una matrice 2D viene linearizzata;
-- quali loop possono essere eseguiti in parallelo.
-
-Quando studi matematica, chiedi sempre:
-
-1. Quali numeri entrano?
-2. Quali numeri escono?
-3. Quali sono le dimensioni?
-4. Posso calcolare un caso piccolo a mano?
-5. Dove vengono memorizzati questi numeri in C?
-
-Il tuo traguardo non e conoscere ogni formula a memoria. E saper trasformare una formula in loop corretti, testati e misurabili.
-
+Devi saper spiegare ogni operazione senza gergo, ricostruire attention minima a mano, prevedere shape/offset/byte/ownership/lifetime, localizzare la prima divergenza, produrre 200 token greedy uguali, spiegare Q8_0 e dimostrare ogni speedup. Sapere C non autorizza a saltare il significato matematico dei dati.
